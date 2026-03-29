@@ -94,10 +94,10 @@ def _synthesize_audio(
         logger.info(f"Synthesizing: text={text[:50]}..., lang={language}, ref={reference_audio_path}")
         
         # Generate audio
-        # XTTS with speaker_wav for voice cloning
+        # XTTS with speaker_wav for voice cloning (must be a list of paths!)
         wav = _tts.tts(
             text=text,
-            speaker_wav=reference_audio_path,
+            speaker_wav=[reference_audio_path],
             language=language,
         )
         
