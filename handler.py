@@ -35,9 +35,9 @@ def _load_model() -> bool:
     try:
         from TTS.api import TTS
         
-        # XTTS model with voice cloning support
+        # XTTS v2 model with voice cloning support
         # This model supports multilingual voice cloning via speaker_wav
-        _tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts", progress_bar=False, gpu=True)
+        _tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False, gpu=True)
         _model_loaded = True
         logger.info("Model loaded successfully")
         return True
