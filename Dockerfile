@@ -35,9 +35,9 @@ RUN pip3 install --no-cache-dir \
     librosa>=0.10.0 \
     scipy>=1.11.0
 
-# Upgrade transformers for BeamSearchScorer compatibility
+# Pin transformers to <4.48 for BeamSearchScorer compatibility
 RUN pip3 install --no-cache-dir \
-    transformers>=4.40.0
+    "transformers>=4.33,<4.48"
 
 # Install Python deps for handler and RunPod
 RUN pip3 install --no-cache-dir \
