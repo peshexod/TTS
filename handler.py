@@ -1,6 +1,6 @@
 # File: handler.py
 # RunPod handler for Coqui TTS (XTTS) with voice cloning
-# Handles HTTP requests for text-to-speech generation with voice cloning from reference audio
+# Identical interface to Chatterbox handler for seamless replacement
 
 import os
 import io
@@ -9,7 +9,11 @@ import base64
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
+
+import torch
+import numpy as np
+import soundfile as sf
 
 # Setup logging
 logging.basicConfig(
@@ -18,14 +22,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global state
+# --- Global State ---
 _model_loaded = False
-_tts = None
+_tts_model = None
 
 
 def _load_model() -> bool:
-    """Load the XTTS model."""
-    global _model_loaded, _tts
+    """
+    Load the XTTS model if not already loaded.
+    Returns True if model is loaded successfully.
+    """
+    global _model_loaded, _tts_model
     
     if _model_loaded:
         logger.info("Model already loaded")
@@ -35,149 +42,208 @@ def _load_model() -> bool:
     try:
         from TTS.api import TTS
         
-        # XTTS v2 model with voice cloning support
-        # This model supports multilingual voice cloning via speaker_wav
-        import torch
-        _tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False)
+        _tts_model = TTS(
+            model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+            progress_bar=False
+        )
+        
         if torch.cuda.is_available():
-            _tts.to("cuda")
+            _tts_model.to("cuda")
+        
         _model_loaded = True
-        logger.info("Model loaded successfully")
+        logger.info("XTTS model loaded successfully")
         return True
     except Exception as e:
-        logger.error(f"Failed to load model: {e}")
+        logger.error(f"Failed to load XTTS model: {e}")
         return False
 
 
-def _download_file(url: str, dest_dir: Path) -> Optional[Path]:
-    """Download a file from URL to destination directory."""
+def _download_file(url: str, temp_dir: Path) -> Optional[Path]:
+    """
+    Download a file from URL to a temporary directory.
+    """
     import requests
     
     try:
         response = requests.get(url, timeout=60)
         response.raise_for_status()
         
-        # Determine filename from URL or generate UUID
-        filename = url.split("/")[-1].split("?")[0]
-        if not filename or "." not in filename:
-            filename = f"reference_{uuid.uuid4().hex[:8]}.wav"
+        filename = None
+        if 'content-disposition' in response.headers:
+            import re
+            match = re.search(r'filename="?([^";\n]+)"?', response.headers['content-disposition'])
+            if match:
+                filename = match.group(1)
         
-        dest_path = dest_dir / filename
-        dest_path.write_bytes(response.content)
-        logger.info(f"Downloaded file to {dest_path}")
-        return dest_path
+        if not filename:
+            filename = url.split('/')[-1].split('?')[0]
+            if not filename or '.' not in filename:
+                filename = f"audio_{uuid.uuid4().hex[:8]}.wav"
+        
+        filepath = temp_dir / filename
+        filepath.write_bytes(response.content)
+        logger.info(f"Downloaded {url} to {filepath}")
+        return filepath
+        
     except Exception as e:
         logger.error(f"Failed to download {url}: {e}")
+        return None
+
+
+def _upload_to_s3(audio_bytes: bytes, storage: Dict[str, str]) -> Optional[str]:
+    """
+    Upload audio bytes to S3-compatible storage.
+    """
+    import boto3
+    from botocore.config import Config
+    
+    try:
+        filename = f"tts_output_{uuid.uuid4().hex[:8]}.wav"
+        
+        s3_params = {
+            'endpoint_url': storage.get('endpoint'),
+            'aws_access_key_id': storage.get('access_key'),
+            'aws_secret_access_key': storage.get('secret_key'),
+        }
+        
+        if storage.get('region'):
+            s3_params['region_name'] = storage.get('region')
+        
+        s3_params['config'] = Config(s3={'addressing_style': 'path'})
+        s3_client = boto3.client('s3', **s3_params)
+        
+        bucket = storage.get('bucket')
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=filename,
+            Body=audio_bytes,
+            ContentType='audio/wav'
+        )
+        
+        endpoint = storage.get('endpoint', '').rstrip('/')
+        public_url = f"{endpoint}/{bucket}/{filename}"
+        
+        logger.info(f"Uploaded to S3: {public_url}")
+        return public_url
+        
+    except Exception as e:
+        logger.error(f"Failed to upload to S3: {e}")
         return None
 
 
 def _synthesize_audio(
     text: str,
     reference_audio_path: Optional[str] = None,
-    language: str = "ru",
-    **kwargs
-) -> tuple[bytes, Optional[str]]:
+    language: str = "ru"
+) -> Tuple[Optional[bytes], Optional[str]]:
     """
-    Synthesize audio using XTTS with voice cloning.
+    Synthesize audio from text using XTTS with voice cloning.
     
     Args:
-        text: Text to synthesize.
-        reference_audio_path: Path to reference WAV file for voice cloning.
-        language: Language code (default: "ru").
+        text: Text to synthesize
+        reference_audio_path: Path to reference audio for voice cloning
+        language: Language code (default: "ru")
         
     Returns:
-        Tuple of (audio_bytes, error_message).
+        Tuple of (audio_bytes, error_message)
     """
-    global _tts
+    global _tts_model
     
     try:
-        import numpy as np
-        import soundfile as sf
-        
         logger.info(f"Synthesizing: text={text[:50]}..., lang={language}, ref={reference_audio_path}")
         
-        # Generate audio
-        # XTTS voice cloning via speaker_wav (string path, per README example)
-        wav = _tts.tts(
+        # XTTS: speaker_wav must be a list of paths
+        speaker_wav = [reference_audio_path] if reference_audio_path else None
+        
+        wav = _tts_model.tts(
             text=text,
-            speaker_wav=reference_audio_path,
+            speaker_wav=speaker_wav,
             language=language,
         )
         
-        # Convert to WAV bytes
+        # Convert to numpy
+        if isinstance(wav, torch.Tensor):
+            audio_np = wav.cpu().numpy()
+        else:
+            audio_np = np.array(wav)
+        
+        # Handle different output shapes
+        if audio_np.ndim > 1:
+            audio_np = audio_np.squeeze()
+        
+        # Normalize to [-1, 1] if needed
+        max_val = np.abs(audio_np).max()
+        if max_val > 1.0:
+            audio_np = audio_np / max_val
+        
+        # Create WAV in memory (XTTS outputs 24kHz)
         buffer = io.BytesIO()
-        sf.write(buffer, wav, 24000, format="WAV")
-        audio_bytes = buffer.getvalue()
+        sf.write(buffer, audio_np, 24000, format='WAV')
+        buffer.seek(0)
+        audio_bytes = buffer.read()
         
         logger.info(f"Generated audio: {len(audio_bytes)} bytes")
         return audio_bytes, None
         
     except Exception as e:
-        logger.error(f"Synthesis failed: {e}")
+        logger.error(f"Synthesis error: {e}")
         return None, str(e)
 
 
-def handler(event, context=None):
+def handler(event, context):
     """
     Main RunPod handler function.
-    
-    RunPod passes the "input" object from the POST /run request.
+    IDENTICAL interface to Chatterbox handler.
     
     Args:
-        event: Dict containing request parameters (from event["input"])
+        event: Dict containing request parameters
             - text: str - Text to synthesize (required)
             - reference_audio_url: str - URL of reference audio for voice cloning (required)
-            - language: str - Language code (default: "ru")
             - storage: dict - S3 credentials for upload (optional)
-                - endpoint: str
-                - bucket: str
-                - access_key: str
-                - secret_key: str
-            - temperature: float - (ignored by XTTS, kept for compatibility)
-            - exaggeration: float - (ignored by XTTS, kept for compatibility)
-            - cfg_weight: float - (ignored by XTTS, kept for compatibility)
-            - seed: int - (ignored by XTTS, kept for compatibility)
-                
-        context: RunPod context (unused)
-    
+            - temperature: float - (ignored by XTTS)
+            - exaggeration: float - (ignored by XTTS)
+            - cfg_weight: float - (ignored by XTTS)
+            - seed: int - (ignored by XTTS)
+            - language: str - Language code (default: "ru")
+            
     Returns:
         Dict with response:
-            - If storage provided: {"status": "completed", "output": {"audio": "<base64>"}}
-            - On error: {"status": "failed", "error": "..."}
+            - If storage provided: {"status": "success", "audio_url": "..."}
+            - If no storage: {"status": "success", "audio": "<base64 encoded wav>"}
+            - On error: {"status": "error", "error": "..."}
     """
     global _model_loaded
-    
-    # Debug: log the incoming event structure
-    logger.info(f"Event keys: {list(event.keys()) if isinstance(event, dict) else type(event)}")
-    
-    # RunPod passes input object directly in event["input"]
-    data = event.get("input") if event.get("input") else event
-    logger.info(f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
     
     # Load model if not loaded
     if not _model_loaded:
         if not _load_model():
             return {
-                "status": "failed",
+                "status": "error",
                 "error": "Failed to load TTS model"
             }
     
-    # Extract parameters from data
-    text = data.get("text", "")
-    reference_audio_url = data.get("reference_audio_url")
-    storage = data.get("storage")
-    language = data.get("language", "ru")
+    # Extract parameters from event - SAME AS CHATTERBOX
+    text = event.get("text", "")
+    reference_audio_url = event.get("reference_audio_url")
+    storage = event.get("storage")
+    
+    # Generation parameters (XTTS only uses language, others ignored for compatibility)
+    temperature = event.get("temperature", 0.8)
+    exaggeration = event.get("exaggeration", 0.5)
+    cfg_weight = event.get("cfg_weight", 0.5)
+    seed = event.get("seed", 0)
+    language = event.get("language", "ru")
     
     # Validate required params
     if not text:
         return {
-            "status": "failed",
+            "status": "error",
             "error": "Missing required parameter: text"
         }
     
     if not reference_audio_url:
         return {
-            "status": "failed",
+            "status": "error",
             "error": "Missing required parameter: reference_audio_url"
         }
     
@@ -193,7 +259,7 @@ def handler(event, context=None):
         reference_audio_path = _download_file(reference_audio_url, temp_path)
         if not reference_audio_path:
             return {
-                "status": "failed",
+                "status": "error",
                 "error": f"Failed to download reference audio from {reference_audio_url}"
             }
         
@@ -201,81 +267,43 @@ def handler(event, context=None):
         audio_bytes, error = _synthesize_audio(
             text=text,
             reference_audio_path=str(reference_audio_path),
-            language=language,
+            language=language
         )
         
         if error:
             return {
-                "status": "FAILED",
-                "output": {"error": error, "audio_base64": None}
+                "status": "error",
+                "error": error
             }
         
         # Handle output based on storage
         if storage:
-            # Upload to S3
             audio_url = _upload_to_s3(audio_bytes, storage)
             if not audio_url:
                 return {
-                    "status": "FAILED",
-                    "output": {"error": "Failed to upload audio to S3", "audio_base64": None}
+                    "status": "error",
+                    "error": "Failed to upload audio to S3"
                 }
-            # For S3, return the URL in a compatible format
-            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            
             return {
-                "status": "COMPLETED",
-                "output": {"audio_base64": audio_b64, "audio_url": audio_url, "error": None}
+                "status": "success",
+                "audio_url": audio_url
             }
         else:
-            # Return base64 encoded audio
-            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
             return {
-                "status": "COMPLETED",
-                "output": {"audio_base64": audio_b64, "error": None}
+                "status": "success",
+                "audio": audio_b64,
+                "format": "wav"
             }
 
 
-def _upload_to_s3(audio_bytes: bytes, storage: dict) -> Optional[str]:
-    """Upload audio bytes to S3 and return URL."""
-    import boto3
-    
-    try:
-        s3_client = boto3.client(
-            "s3",
-            endpoint_url=storage.get("endpoint"),
-            aws_access_key_id=storage.get("access_key"),
-            aws_secret_access_key=storage.get("secret_key"),
-        )
-        
-        key = f"tts_audio/{uuid.uuid4().hex}.wav"
-        s3_client.put_object(
-            Bucket=storage.get("bucket"),
-            Key=key,
-            Body=audio_bytes,
-            ContentType="audio/wav",
-        )
-        
-        # Build public URL
-        endpoint = storage.get("endpoint", "").rstrip("/")
-        bucket = storage.get("bucket")
-        url = f"{endpoint}/{bucket}/{key}"
-        
-        logger.info(f"Uploaded to S3: {url}")
-        return url
-        
-    except Exception as e:
-        logger.error(f"S3 upload failed: {e}")
-        return None
-
-
-# --- For local testing ---
+# For local testing
 if __name__ == "__main__":
-    # Test handler locally
     test_event = {
         "text": "Привет, это тест!",
-        "reference_audio_url": "https://s3.firstvds.ru/celebrity-videos/voice_samples/test.wav",
-        "language": "ru",
+        "reference_audio_url": "https://example.com/voice.wav",
+        "language": "ru"
     }
-    
-    if _load_model():
-        result = handler(test_event)
-        print(result)
+    result = handler(test_event, None)
+    print(f"Result: {result}")
