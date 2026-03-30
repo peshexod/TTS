@@ -37,7 +37,10 @@ def _load_model() -> bool:
         
         # XTTS v2 model with voice cloning support
         # This model supports multilingual voice cloning via speaker_wav
-        _tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False, gpu=True)
+        import torch
+        _tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False)
+        if torch.cuda.is_available():
+            _tts.to("cuda")
         _model_loaded = True
         logger.info("Model loaded successfully")
         return True
@@ -94,10 +97,10 @@ def _synthesize_audio(
         logger.info(f"Synthesizing: text={text[:50]}..., lang={language}, ref={reference_audio_path}")
         
         # Generate audio
-        # XTTS with speaker_wav for voice cloning (must be a list of paths!)
+        # XTTS voice cloning via speaker_wav (string path, per README example)
         wav = _tts.tts(
             text=text,
-            speaker_wav=[reference_audio_path],
+            speaker_wav=reference_audio_path,
             language=language,
         )
         
