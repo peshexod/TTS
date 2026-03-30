@@ -1,24 +1,33 @@
 # Dockerfile for Coqui TTS (XTTS) RunPod Serverless
-# Based on PyTorch CUDA image
+# Based on NVIDIA CUDA image with PyTorch
 
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system deps and Python
 RUN apt-get update && apt-get install -y \
+    python3.11 \
     python3-pip \
+    python3.11-venv \
     espeak-ng \
     libsndfile1-dev \
     ffmpeg \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3
 
-# Install Coqui TTS (includes XTTS model) - no git clone needed, pip installs from PyPI
+# Install PyTorch with CUDA 12.1
+RUN pip3 install --no-cache-dir \
+    torch==2.1.0 \
+    torchaudio==2.1.0 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# Install Coqui TTS
 RUN pip3 install --no-cache-dir \
     TTS>=0.22.0 \
     soundfile>=0.12.0 \
@@ -34,15 +43,13 @@ RUN pip3 install --no-cache-dir \
     psutil>=5.9.0 \
     runpod>=0.9.0
 
-# Copy only the necessary files (no git history)
+# Copy only the necessary files
 COPY handler.py /app/handler.py
 COPY concurrency.py /app/concurrency.py
 COPY worker.py /app/worker.py
 
-# Set Python path
 ENV PYTHONPATH=/app:$PYTHONPATH
 
 EXPOSE 8000
 
-# Run worker (handles concurrency modifier via adjust_concurrency)
 CMD ["python3", "/app/worker.py"]
