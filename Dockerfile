@@ -29,14 +29,19 @@ RUN pip3 install --no-cache-dir \
     librosa>=0.10.0 \
     scipy>=1.11.0
 
-# Install Python deps for handler
+# Install Python deps for handler and RunPod
 RUN pip3 install --no-cache-dir \
     boto3>=1.26.0 \
     requests>=2.28.0 \
-    numpy>=1.24.0
+    numpy>=1.24.0 \
+    pynvml>=11.5.0 \
+    psutil>=5.9.0 \
+    runpod>=0.9.0
 
-# Copy handler
+# Copy handler and concurrency files
 COPY handler.py /app/handler.py
+COPY concurrency.py /app/concurrency.py
+COPY worker.py /app/worker.py
 
 # Set Python path
 ENV PYTHONPATH=/app:$PYTHONPATH
@@ -47,5 +52,5 @@ HEALTHCHECK --interval=30s --timeout=60s --start-period=300s --retries=3 \
 
 EXPOSE 8000
 
-# Run handler directly (RunPod will wrap this)
-CMD ["python3", "/app/handler.py"]
+# Run worker (handles concurrency modifier via adjust_concurrency)
+CMD ["python3", "/app/worker.py"]
