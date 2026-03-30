@@ -147,8 +147,12 @@ def handler(event, context=None):
     """
     global _model_loaded
     
-    # RunPod passes input object directly
-    data = event.get("input", event)
+    # Debug: log the incoming event structure
+    logger.info(f"Event keys: {list(event.keys()) if isinstance(event, dict) else type(event)}")
+    
+    # RunPod passes input object directly in event["input"]
+    data = event.get("input") if event.get("input") else event
+    logger.info(f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
     
     # Load model if not loaded
     if not _model_loaded:
