@@ -49,6 +49,7 @@ COPY concurrency.py /app/concurrency.py
 COPY worker.py /app/worker.py
 
 ENV PYTHONPATH=/app:$PYTHONPATH
+ENV COQUI_TOS_AGREED=1
 
 EXPOSE 8000
 
