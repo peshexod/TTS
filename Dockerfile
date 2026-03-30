@@ -5,24 +5,20 @@ FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3-pip \
-    python3-dev \
     espeak-ng \
     libsndfile1-dev \
     ffmpeg \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip3 install --upgrade pip
-
-# Install Coqui TTS (includes XTTS model)
+# Install Coqui TTS (includes XTTS model) - no git clone needed, pip installs from PyPI
 RUN pip3 install --no-cache-dir \
     TTS>=0.22.0 \
     soundfile>=0.12.0 \
@@ -38,17 +34,13 @@ RUN pip3 install --no-cache-dir \
     psutil>=5.9.0 \
     runpod>=0.9.0
 
-# Copy handler and concurrency files
+# Copy only the necessary files (no git history)
 COPY handler.py /app/handler.py
 COPY concurrency.py /app/concurrency.py
 COPY worker.py /app/worker.py
 
 # Set Python path
 ENV PYTHONPATH=/app:$PYTHONPATH
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=60s --start-period=300s --retries=3 \
-    CMD python3 -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
 
 EXPOSE 8000
 
