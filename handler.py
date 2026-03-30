@@ -223,16 +223,19 @@ def handler(event, context):
             }
     
     # Extract parameters from event - SAME AS CHATTERBOX
-    text = event.get("text", "")
-    reference_audio_url = event.get("reference_audio_url")
-    storage = event.get("storage")
+    # Bot sends {"input": {...}} so we need to unwrap
+    input_data = event.get("input", event)
+    
+    text = input_data.get("text", "")
+    reference_audio_url = input_data.get("reference_audio_url")
+    storage = input_data.get("storage")
     
     # Generation parameters (XTTS only uses language, others ignored for compatibility)
-    temperature = event.get("temperature", 0.8)
-    exaggeration = event.get("exaggeration", 0.5)
-    cfg_weight = event.get("cfg_weight", 0.5)
-    seed = event.get("seed", 0)
-    language = event.get("language", "ru")
+    temperature = input_data.get("temperature", 0.8)
+    exaggeration = input_data.get("exaggeration", 0.5)
+    cfg_weight = input_data.get("cfg_weight", 0.5)
+    seed = input_data.get("seed", 0)
+    language = input_data.get("language", "ru")
     
     # Validate required params
     if not text:
