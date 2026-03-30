@@ -15,6 +15,18 @@ import torch
 import numpy as np
 import soundfile as sf
 
+# Fix torch.load compatibility for XTTS speaker files
+import os
+os.environ["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "0"
+os.environ["PYTORCH_WEIGHTS_ONLY"] = "0"
+
+import torch
+torch.serialization.add_safe_globals([
+    "TTS.tts.models.xtts.GPT",
+    "TTS.tts.models.xtts.Vocoder",
+    "TTS.tts.models.xtts.XttsInference",
+])
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
