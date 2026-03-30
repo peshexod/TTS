@@ -6,6 +6,7 @@ FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV COQUI_TOS_AGREED=1
 
 WORKDIR /app
 
@@ -21,18 +22,22 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3
 
-# Install PyTorch with CUDA 12.1
+# Install PyTorch 2.4 with CUDA 12.1
 RUN pip3 install --no-cache-dir \
-    torch==2.1.0 \
-    torchaudio==2.1.0 \
+    torch>=2.4.0 \
+    torchaudio>=2.4.0 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install Coqui TTS
+# Install Coqui TTS (includes XTTS model)
 RUN pip3 install --no-cache-dir \
     TTS>=0.22.0 \
     soundfile>=0.12.0 \
     librosa>=0.10.0 \
     scipy>=1.11.0
+
+# Upgrade transformers for BeamSearchScorer compatibility
+RUN pip3 install --no-cache-dir \
+    transformers>=4.40.0
 
 # Install Python deps for handler and RunPod
 RUN pip3 install --no-cache-dir \
@@ -49,7 +54,6 @@ COPY concurrency.py /app/concurrency.py
 COPY worker.py /app/worker.py
 
 ENV PYTHONPATH=/app:$PYTHONPATH
-ENV COQUI_TOS_AGREED=1
 
 EXPOSE 8000
 
