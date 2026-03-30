@@ -57,4 +57,7 @@ ENV PYTHONPATH=/app:$PYTHONPATH
 
 EXPOSE 8000
 
+# Pre-download XTTS model to cache
+RUN python3 -c "from TTS.api import TTS; tts = TTS('tts_models/multilingual/multi-dataset/xtts_v2')"
+
 CMD ["python3", "/app/worker.py"]
