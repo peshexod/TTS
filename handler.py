@@ -190,7 +190,7 @@ def _synthesize_audio(
         return None, str(e)
 
 
-def handler(event, context):
+def handler(event, context=None):
     """
     Main RunPod handler function.
     IDENTICAL interface to Chatterbox handler.
