@@ -121,8 +121,10 @@ def handler(event, context=None):
     """
     Main RunPod handler function.
     
+    RunPod passes the "input" object from the POST /run request.
+    
     Args:
-        event: Dict containing request parameters
+        event: Dict containing request parameters (from event["input"])
             - text: str - Text to synthesize (required)
             - reference_audio_url: str - URL of reference audio for voice cloning (required)
             - language: str - Language code (default: "ru")
@@ -131,41 +133,47 @@ def handler(event, context=None):
                 - bucket: str
                 - access_key: str
                 - secret_key: str
+            - temperature: float - (ignored by XTTS, kept for compatibility)
+            - exaggeration: float - (ignored by XTTS, kept for compatibility)
+            - cfg_weight: float - (ignored by XTTS, kept for compatibility)
+            - seed: int - (ignored by XTTS, kept for compatibility)
                 
         context: RunPod context (unused)
     
     Returns:
         Dict with response:
-            - If storage provided: {"status": "success", "audio_url": "..."}
-            - If no storage: {"status": "success", "audio": "<base64 encoded wav>"}
-            - On error: {"status": "error", "error": "..."}
+            - If storage provided: {"status": "completed", "output": {"audio": "<base64>"}}
+            - On error: {"status": "failed", "error": "..."}
     """
     global _model_loaded
+    
+    # RunPod passes input object directly
+    data = event.get("input", event)
     
     # Load model if not loaded
     if not _model_loaded:
         if not _load_model():
             return {
-                "status": "error",
+                "status": "failed",
                 "error": "Failed to load TTS model"
             }
     
-    # Extract parameters from event
-    text = event.get("text", "")
-    reference_audio_url = event.get("reference_audio_url")
-    storage = event.get("storage")
-    language = event.get("language", "ru")
+    # Extract parameters from data
+    text = data.get("text", "")
+    reference_audio_url = data.get("reference_audio_url")
+    storage = data.get("storage")
+    language = data.get("language", "ru")
     
     # Validate required params
     if not text:
         return {
-            "status": "error",
+            "status": "failed",
             "error": "Missing required parameter: text"
         }
     
     if not reference_audio_url:
         return {
-            "status": "error",
+            "status": "failed",
             "error": "Missing required parameter: reference_audio_url"
         }
     
@@ -181,7 +189,7 @@ def handler(event, context=None):
         reference_audio_path = _download_file(reference_audio_url, temp_path)
         if not reference_audio_path:
             return {
-                "status": "error",
+                "status": "failed",
                 "error": f"Failed to download reference audio from {reference_audio_url}"
             }
         
@@ -194,8 +202,8 @@ def handler(event, context=None):
         
         if error:
             return {
-                "status": "error",
-                "error": error
+                "status": "FAILED",
+                "output": {"error": error, "audio_base64": None}
             }
         
         # Handle output based on storage
@@ -204,14 +212,22 @@ def handler(event, context=None):
             audio_url = _upload_to_s3(audio_bytes, storage)
             if not audio_url:
                 return {
-                    "status": "error",
-                    "error": "Failed to upload audio to S3"
+                    "status": "FAILED",
+                    "output": {"error": "Failed to upload audio to S3", "audio_base64": None}
                 }
-            return {"status": "success", "audio_url": audio_url}
+            # For S3, return the URL in a compatible format
+            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            return {
+                "status": "COMPLETED",
+                "output": {"audio_base64": audio_b64, "audio_url": audio_url, "error": None}
+            }
         else:
             # Return base64 encoded audio
             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-            return {"status": "success", "audio": audio_b64}
+            return {
+                "status": "COMPLETED",
+                "output": {"audio_base64": audio_b64, "error": None}
+            }
 
 
 def _upload_to_s3(audio_bytes: bytes, storage: dict) -> Optional[str]:
